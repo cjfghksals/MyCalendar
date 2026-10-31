@@ -11,7 +11,7 @@ Google Calendar 일정을 iPhone 잠금 화면과 홈 화면 위젯에 표시하
 
 | 단계 | 내용 | 상태 |
 |---|---|---|
-| 1 | 프로젝트 환경 구축 (XcodeGen, 앱/위젯 타깃, App Groups, GitHub Actions) | 진행 중 |
+| 1 | 프로젝트 환경 구축 (XcodeGen, 앱/위젯 타깃, App Groups, GitHub Actions) | 완료 |
 | 2 | 기본 앱 (메인 화면, 설정 화면, 데이터 모델) | 대기 |
 | 3 | Google Calendar 연동 (OAuth, API, 파싱, 오류 처리) | 대기 |
 | 4 | 캘린더 UI (1일, 7일, 월간, 사용자 색상) | 대기 |
