@@ -140,10 +140,11 @@ final class GoogleCalendarServiceTests: XCTestCase {
         StubURLProtocol.handler = { request in
             let path = request.url?.path ?? ""
             if path.hasSuffix("/users/me/calendarList") {
-                return (200, #"{"items":[{"id":"me@example.com","summary":"나","backgroundColor":"#16a765","primary":true},{"id":"secret@example.com","summary":"비공개"}]}"#)
+                // 본문에 "#가 들어 있으므로 ##"..."## 로 감싼다.
+                return (200, ##"{"items":[{"id":"me@example.com","summary":"나","backgroundColor":"#16a765","primary":true},{"id":"secret@example.com","summary":"비공개"}]}"##)
             }
             if path.hasSuffix("/colors") {
-                return (200, #"{"event":{"5":{"background":"#fbd75b","foreground":"#1d1d1d"}}}"#)
+                return (200, ##"{"event":{"5":{"background":"#fbd75b","foreground":"#1d1d1d"}}}"##)
             }
             if path.contains("secret@example.com") {
                 // 일정 목록 권한이 없는 캘린더는 건너뛴다.
