@@ -21,6 +21,16 @@ settings:
     # 앱과 위젯이 데이터를 공유하는 App Group ID.
     # Config/*.entitlements 와 Info.plist의 AppGroupIdentifier 가 이 값을 참조한다.
     APP_GROUP_ID: group.$(BUNDLE_ID_PREFIX).mycalendar
+    # Google OAuth iOS 클라이언트 ID. 소스에는 넣지 않고,
+    # CI가 GitHub Secret(GOOGLE_IOS_CLIENT_ID)으로 xcodebuild에 넘겨 덮어쓴다.
+    GOOGLE_IOS_CLIENT_ID: ""
+    GOOGLE_REVERSED_CLIENT_ID: com.googleusercontent.apps.not-configured
+
+# 외부 라이브러리: Google OAuth 로그인 (OpenID Foundation AppAuth, 의존 패키지 없음)
+packages:
+  AppAuth:
+    url: https://github.com/openid/AppAuth-iOS
+    from: 3.0.0
 
 # 모든 타깃에 공통으로 적용하는 설정
 # (XcodeGen iOS 프리셋이 타깃 수준에서 iPhone+iPad로 설정하므로 타깃마다 덮어쓴다)
@@ -40,6 +50,7 @@ targets:
       - path: Sources/Shared
     dependencies:
       - target: MyCalendarWidget
+      - package: AppAuth
     info:
       path: Config/MyCalendar-Info.plist
       properties:
@@ -47,6 +58,12 @@ targets:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         AppGroupIdentifier: $(APP_GROUP_ID)
+        GoogleClientID: $(GOOGLE_IOS_CLIENT_ID)
+        # Google 로그인 후 앱으로 돌아오는 주소 (역순 클라이언트 ID)
+        CFBundleURLTypes:
+          - CFBundleURLName: GoogleOAuth
+            CFBundleURLSchemes:
+              - $(GOOGLE_REVERSED_CLIENT_ID)
         LSRequiresIPhoneOS: true
         UILaunchScreen: {}
         UIApplicationSceneManifest:
@@ -97,6 +114,8 @@ targets:
       - path: Tests/MyCalendarTests
     dependencies:
       - target: MyCalendar
+      # 앱 모듈이 AppAuth(Objective-C)를 쓰므로 테스트 컴파일에도 모듈이 필요하다.
+      - package: AppAuth
     settings:
       groups:
         - common

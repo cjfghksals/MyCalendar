@@ -1,14 +1,16 @@
 import SwiftUI
 
-/// 설정 화면: 표시 방식, 테마 색상, 일정 표시, 캘린더별 표시·색상, 개발용 데이터
+/// 설정 화면: Google 계정, 표시 방식, 테마 색상, 일정 표시, 캘린더별 표시·색상, 개발용 데이터
 struct SettingsView: View {
     let settingsStore: SettingsStore
     let eventStore: EventStore
+    let authService: GoogleAuthService
 
     private var settings: CalendarSettings { settingsStore.settings }
 
     var body: some View {
         Form {
+            accountSection
             displaySection
             themeSection
             eventDisplaySection
@@ -18,6 +20,51 @@ struct SettingsView: View {
         }
         .navigationTitle("설정")
         .navigationBarTitleDisplayMode(.inline)
+    }
+
+    // MARK: - Google 계정
+
+    private var accountSection: some View {
+        Section {
+            if !authService.isConfigured {
+                Text(GoogleAuthError.notConfigured.errorDescription ?? "")
+                    .foregroundStyle(.secondary)
+            } else if authService.isSignedIn {
+                // 기본 캘린더의 ID가 계정 이메일이다 (이메일 권한을 따로 요청하지 않음).
+                LabeledContent("계정", value: eventStore.calendars.first(where: \.isPrimary)?.id ?? "연결됨")
+                if let updatedAt = eventStore.snapshot?.updatedAt {
+                    LabeledContent("마지막 동기화", value: updatedAt.formatted(date: .abbreviated, time: .shortened))
+                }
+                Button {
+                    Task { await eventStore.syncIfSignedIn(auth: authService, force: true) }
+                } label: {
+                    HStack {
+                        Text("지금 동기화")
+                        if eventStore.isSyncing {
+                            Spacer()
+                            ProgressView()
+                        }
+                    }
+                }
+                .disabled(eventStore.isSyncing)
+                Button("연결 해제", role: .destructive) {
+                    Task { await eventStore.disconnectGoogle(auth: authService) }
+                }
+            } else {
+                Button("Google 계정 연결") {
+                    Task { await eventStore.connectGoogle(auth: authService) }
+                }
+            }
+
+            if let message = eventStore.lastError {
+                Text(message)
+                    .foregroundStyle(.red)
+            }
+        } header: {
+            Text("Google 계정")
+        } footer: {
+            Text("일정 읽기 권한(calendar.readonly)만 요청합니다. 로그인 정보는 이 iPhone의 Keychain에만 저장하고 위젯과 공유하지 않습니다. 연결을 해제하면 받아 둔 일정도 지웁니다.")
+        }
     }
 
     // MARK: - 표시 방식
@@ -148,7 +195,7 @@ struct SettingsView: View {
             }
             .disabled(!eventStore.hasData)
 
-            ForEach([settingsStore.lastError, eventStore.lastError].compactMap { $0 }, id: \.self) { message in
+            if let message = settingsStore.lastError {
                 Text(message)
                     .foregroundStyle(.red)
             }

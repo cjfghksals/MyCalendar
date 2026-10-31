@@ -166,6 +166,7 @@ final class ModelTests: XCTestCase {
         XCTAssertEqual(store.settings.maxEventsPerDay, 5)
     }
 
+    @MainActor
     func testEventStoreSampleDataAndClear() throws {
         var reloadCount = 0
         let store = EventStore(storage: try makeTemporaryStorage(), reloadWidgets: { reloadCount += 1 })

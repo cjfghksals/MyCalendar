@@ -2,8 +2,11 @@ import SwiftUI
 
 @main
 struct MyCalendarApp: App {
+    @Environment(\.scenePhase) private var scenePhase
+
     @State private var settingsStore: SettingsStore
     @State private var eventStore: EventStore
+    @State private var authService: GoogleAuthService
     private let showSettingsOnLaunch: Bool
 
     init() {
@@ -12,20 +15,33 @@ struct MyCalendarApp: App {
             let stores = config.makeStores()
             _settingsStore = State(initialValue: stores.settings)
             _eventStore = State(initialValue: stores.events)
+            // 스크린샷에서는 Google 연결을 쓰지 않는다.
+            _authService = State(initialValue: GoogleAuthService(config: nil))
             showSettingsOnLaunch = config.screen == .settings
             return
         }
         #endif
         _settingsStore = State(initialValue: SettingsStore())
         _eventStore = State(initialValue: EventStore())
+        _authService = State(initialValue: GoogleAuthService())
         showSettingsOnLaunch = false
     }
 
     var body: some Scene {
         WindowGroup {
-            HomeView(settingsStore: settingsStore, eventStore: eventStore, showSettingsOnLaunch: showSettingsOnLaunch)
-                .preferredColorScheme(settingsStore.settings.appearance.colorScheme)
-                .tint(Color(hex: settingsStore.settings.theme.accentHex, fallback: .accentColor))
+            HomeView(
+                settingsStore: settingsStore,
+                eventStore: eventStore,
+                authService: authService,
+                showSettingsOnLaunch: showSettingsOnLaunch
+            )
+            .preferredColorScheme(settingsStore.settings.appearance.colorScheme)
+            .tint(Color(hex: settingsStore.settings.theme.accentHex, fallback: .accentColor))
+            .onChange(of: scenePhase, initial: true) { _, phase in
+                // 앱이 앞으로 나올 때 마지막 동기화가 오래됐으면 자동으로 갱신한다.
+                guard phase == .active else { return }
+                Task { await eventStore.syncIfSignedIn(auth: authService, force: false) }
+            }
         }
     }
 }
@@ -62,6 +78,7 @@ struct ScreenshotConfig {
         return ScreenshotConfig(screen: screen, displayMode: mode)
     }
 
+    @MainActor
     func makeStores() -> (settings: SettingsStore, events: EventStore) {
         let suiteName = "MyCalendar.screenshot"
         let defaults = UserDefaults(suiteName: suiteName) ?? .standard

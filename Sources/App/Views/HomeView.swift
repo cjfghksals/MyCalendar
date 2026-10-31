@@ -8,14 +8,21 @@ struct HomeView: View {
 
     let settingsStore: SettingsStore
     let eventStore: EventStore
+    let authService: GoogleAuthService
 
     @State private var path: [Route]
     /// 오늘 기준 범위에서 이전(-)·다음(+)으로 이동한 정도
     @State private var offset = 0
 
-    init(settingsStore: SettingsStore, eventStore: EventStore, showSettingsOnLaunch: Bool = false) {
+    init(
+        settingsStore: SettingsStore,
+        eventStore: EventStore,
+        authService: GoogleAuthService,
+        showSettingsOnLaunch: Bool = false
+    ) {
         self.settingsStore = settingsStore
         self.eventStore = eventStore
+        self.authService = authService
         _path = State(initialValue: showSettingsOnLaunch ? [.settings] : [])
     }
 
@@ -42,6 +49,10 @@ struct HomeView: View {
 
                     periodHeader
 
+                    if let message = eventStore.lastError {
+                        errorBanner(message)
+                    }
+
                     if eventStore.hasData {
                         CalendarView(
                             sections: DaySection.make(from: eventStore.visibleEvents(settings: settings), range: range),
@@ -56,14 +67,23 @@ struct HomeView: View {
                 .padding(16)
             }
             .refreshable {
-                // 3단계에서 Google Calendar 동기화로 바뀐다. 지금은 저장된 데이터를 다시 읽는다.
-                eventStore.reload()
+                if authService.isSignedIn {
+                    await eventStore.syncIfSignedIn(auth: authService, force: true)
+                } else {
+                    eventStore.reload()
+                }
             }
             .background(backgroundColor.ignoresSafeArea())
             .navigationTitle("MyCalendar")
             .navigationBarTitleDisplayMode(.inline)
             .toolbarBackground(backgroundColor, for: .navigationBar)
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    if eventStore.isSyncing {
+                        ProgressView()
+                            .accessibilityLabel("동기화 중")
+                    }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     NavigationLink(value: Route.settings) {
                         Image(systemName: "gearshape")
@@ -74,7 +94,7 @@ struct HomeView: View {
             .navigationDestination(for: Route.self) { route in
                 switch route {
                 case .settings:
-                    SettingsView(settingsStore: settingsStore, eventStore: eventStore)
+                    SettingsView(settingsStore: settingsStore, eventStore: eventStore, authService: authService)
                 }
             }
             .onChange(of: settings.displayMode) {
@@ -122,7 +142,40 @@ struct HomeView: View {
         .tint(accentColor)
     }
 
+    // MARK: - 오류 안내
+
+    private func errorBanner(_ message: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+            Text(message)
+                .font(.subheadline)
+                .foregroundStyle(textColor)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button {
+                eventStore.dismissError()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(secondaryColor)
+            }
+            .accessibilityLabel("안내 닫기")
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 12).fill(Color.orange.opacity(0.15)))
+    }
+
     // MARK: - 데이터가 없을 때
+
+    private var emptyMessage: String {
+        if authService.isSignedIn {
+            return "Google Calendar에서 일정을 불러오지 못했습니다.\n아래로 당기거나 다시 시도해 주세요."
+        }
+        if authService.isConfigured {
+            return "Google 계정을 연결하면 일정을 불러옵니다.\n샘플 일정으로 화면과 위젯을 먼저 확인할 수도 있습니다."
+        }
+        return "이 빌드에는 Google 클라이언트 ID가 없습니다 (README 참고).\n샘플 일정으로 화면과 위젯을 확인할 수 있습니다."
+    }
 
     private var emptyState: some View {
         VStack(spacing: 12) {
@@ -132,16 +185,30 @@ struct HomeView: View {
             Text("아직 불러온 일정이 없습니다")
                 .font(.headline)
                 .foregroundStyle(textColor)
-            Text("Google 계정 연결은 3단계에서 추가됩니다.\n지금은 샘플 일정으로 화면과 위젯을 확인할 수 있습니다.")
+            Text(emptyMessage)
                 .font(.subheadline)
                 .foregroundStyle(secondaryColor)
                 .multilineTextAlignment(.center)
+
+            if authService.isSignedIn {
+                Button("다시 불러오기") {
+                    Task { await eventStore.syncIfSignedIn(auth: authService, force: true) }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(eventStore.isSyncing)
+            } else if authService.isConfigured {
+                Button("Google 계정 연결") {
+                    Task { await eventStore.connectGoogle(auth: authService) }
+                }
+                .buttonStyle(.borderedProminent)
+            }
+
             Button("샘플 일정 넣기") {
                 eventStore.loadSampleData()
             }
-            .buttonStyle(.borderedProminent)
-            .tint(accentColor)
+            .buttonStyle(.bordered)
         }
+        .tint(accentColor)
         .frame(maxWidth: .infinity)
         .padding(24)
         .background(RoundedRectangle(cornerRadius: 16).fill(textColor.opacity(0.07)))
@@ -155,6 +222,10 @@ struct HomeView: View {
     )
     let eventStore = EventStore(storage: storage, reloadWidgets: {})
     eventStore.loadSampleData()
-    return HomeView(settingsStore: SettingsStore(storage: storage, reloadWidgets: {}), eventStore: eventStore)
-        .preferredColorScheme(.dark)
+    return HomeView(
+        settingsStore: SettingsStore(storage: storage, reloadWidgets: {}),
+        eventStore: eventStore,
+        authService: GoogleAuthService(config: nil)
+    )
+    .preferredColorScheme(.dark)
 }
