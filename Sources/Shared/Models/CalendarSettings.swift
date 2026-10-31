@@ -17,6 +17,28 @@ enum DisplayMode: String, Codable, CaseIterable, Identifiable, Sendable {
     }
 }
 
+/// 화면 밝기 모드. 바꾸면 해당 모드의 기본 색상 테마가 적용된다.
+enum AppearanceMode: String, Codable, CaseIterable, Identifiable, Sendable {
+    case dark
+    case light
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .dark: return "다크"
+        case .light: return "라이트"
+        }
+    }
+
+    var defaultTheme: ThemeColors {
+        switch self {
+        case .dark: return .dark
+        case .light: return .light
+        }
+    }
+}
+
 /// HEX 문자열("#RRGGBB")로 관리하는 색상 테마
 struct ThemeColors: Codable, Hashable, Sendable {
     var backgroundHex: String
@@ -42,6 +64,7 @@ struct ThemeColors: Codable, Hashable, Sendable {
 /// 사용자 표시 설정. 앱에서 수정하고 위젯은 읽기만 한다.
 struct CalendarSettings: Codable, Hashable, Sendable {
     var displayMode: DisplayMode
+    var appearance: AppearanceMode
     var theme: ThemeColors
     var showEventTitles: Bool
     /// 월간 달력에서 날짜별로 보여줄 최대 일정 수
@@ -54,16 +77,19 @@ struct CalendarSettings: Codable, Hashable, Sendable {
     static let maxEventsPerDayRange = 1...6
     static let `default` = CalendarSettings()
 
+    /// theme을 생략하면 appearance의 기본 테마를 쓴다.
     init(
         displayMode: DisplayMode = .daily,
-        theme: ThemeColors = .dark,
+        appearance: AppearanceMode = .dark,
+        theme: ThemeColors? = nil,
         showEventTitles: Bool = true,
         maxEventsPerDay: Int = 3,
         hiddenCalendarIds: Set<String> = [],
         calendarColorOverrides: [String: String] = [:]
     ) {
         self.displayMode = displayMode
-        self.theme = theme
+        self.appearance = appearance
+        self.theme = theme ?? appearance.defaultTheme
         self.showEventTitles = showEventTitles
         self.maxEventsPerDay = Self.clampedMaxEvents(maxEventsPerDay)
         self.hiddenCalendarIds = hiddenCalendarIds
@@ -72,6 +98,7 @@ struct CalendarSettings: Codable, Hashable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case displayMode
+        case appearance
         case theme
         case showEventTitles
         case maxEventsPerDay
@@ -85,7 +112,9 @@ struct CalendarSettings: Codable, Hashable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let fallback = CalendarSettings()
         displayMode = (try? container.decodeIfPresent(DisplayMode.self, forKey: .displayMode)) ?? fallback.displayMode
-        theme = (try? container.decodeIfPresent(ThemeColors.self, forKey: .theme)) ?? fallback.theme
+        let storedAppearance = (try? container.decodeIfPresent(AppearanceMode.self, forKey: .appearance)) ?? fallback.appearance
+        appearance = storedAppearance
+        theme = (try? container.decodeIfPresent(ThemeColors.self, forKey: .theme)) ?? storedAppearance.defaultTheme
         showEventTitles = (try? container.decodeIfPresent(Bool.self, forKey: .showEventTitles)) ?? fallback.showEventTitles
         let storedMax = (try? container.decodeIfPresent(Int.self, forKey: .maxEventsPerDay)) ?? fallback.maxEventsPerDay
         maxEventsPerDay = Self.clampedMaxEvents(storedMax)
@@ -96,6 +125,17 @@ struct CalendarSettings: Codable, Hashable, Sendable {
     /// 일정에 적용할 색상: 사용자 지정 캘린더 색상 → 일정 자체 색상 순
     func colorHex(for event: CalendarEvent) -> String? {
         calendarColorOverrides[event.calendarId] ?? event.colorHex
+    }
+
+    /// 테마 색상을 기본값에서 바꿨는지 여부
+    var isThemeCustomized: Bool {
+        theme != appearance.defaultTheme
+    }
+
+    /// 밝기 모드를 바꾸고 그 모드의 기본 색상 테마를 적용한다.
+    mutating func applyAppearance(_ mode: AppearanceMode) {
+        appearance = mode
+        theme = mode.defaultTheme
     }
 
     private static func clampedMaxEvents(_ value: Int) -> Int {

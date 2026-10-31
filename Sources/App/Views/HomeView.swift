@@ -1,103 +1,160 @@
 import SwiftUI
-import WidgetKit
 
-/// 1단계 임시 메인 화면.
-/// 저장소 상태를 보여주고, 샘플 일정으로 앱 → App Group → 위젯 데이터 흐름을 점검한다.
-/// Google Calendar 연동과 실제 달력 화면은 3·4단계에서 구현한다.
+/// 메인 화면: 표시 방식(1일·7일·한 달)에 따라 일정을 날짜별로 보여준다.
 struct HomeView: View {
-    private let storage = AppGroupStorage.shared
+    enum Route: Hashable {
+        case settings
+    }
 
-    @State private var snapshot: CalendarSnapshot?
-    @State private var errorMessage: String?
+    let settingsStore: SettingsStore
+    let eventStore: EventStore
 
-    private var events: [CalendarEvent] {
-        snapshot?.events.sortedForDisplay() ?? []
+    @State private var path: [Route]
+    /// 오늘 기준 범위에서 이전(-)·다음(+)으로 이동한 정도
+    @State private var offset = 0
+
+    init(settingsStore: SettingsStore, eventStore: EventStore, showSettingsOnLaunch: Bool = false) {
+        self.settingsStore = settingsStore
+        self.eventStore = eventStore
+        _path = State(initialValue: showSettingsOnLaunch ? [.settings] : [])
+    }
+
+    private var settings: CalendarSettings { settingsStore.settings }
+    private var backgroundColor: Color { Color(hex: settings.theme.backgroundHex, fallback: .black) }
+    private var textColor: Color { Color(hex: settings.theme.textHex, fallback: .primary) }
+    private var secondaryColor: Color { Color(hex: settings.theme.secondaryTextHex, fallback: .secondary) }
+    private var accentColor: Color { Color(hex: settings.theme.accentHex, fallback: .accentColor) }
+
+    private var range: DayRange {
+        settings.displayMode.dayRange(around: .now, offset: offset)
     }
 
     var body: some View {
-        NavigationStack {
-            List {
-                Section("상태") {
-                    LabeledContent("App Group", value: storage.isShared ? "연결됨" : "사용 불가 (서명 필요)")
-                    LabeledContent("저장된 일정", value: "\(events.count)개")
-                    if let updatedAt = snapshot?.updatedAt {
-                        LabeledContent("마지막 갱신", value: updatedAt.formatted(date: .abbreviated, time: .shortened))
-                    }
-                    if let errorMessage {
-                        Text(errorMessage)
-                            .foregroundStyle(.red)
-                    }
-                }
-
-                Section("일정") {
-                    if events.isEmpty {
-                        Text("저장된 일정이 없습니다.")
-                            .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(events) { event in
-                            EventRow(event: event)
+        NavigationStack(path: $path) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Picker("보기", selection: settingsStore.binding(\.displayMode)) {
+                        ForEach(DisplayMode.allCases) { mode in
+                            Text(mode.title).tag(mode)
                         }
                     }
-                }
+                    .pickerStyle(.segmented)
 
-                Section {
-                    Button("샘플 일정 저장", action: saveSamples)
-                    Button("저장된 일정 지우기", role: .destructive, action: clearEvents)
-                } footer: {
-                    Text("Google Calendar 연동 전에 앱과 위젯 사이의 데이터 공유를 확인하기 위한 임시 기능입니다.")
+                    periodHeader
+
+                    if eventStore.hasData {
+                        CalendarView(
+                            sections: DaySection.make(from: eventStore.visibleEvents(settings: settings), range: range),
+                            displayMode: settings.displayMode,
+                            settings: settings,
+                            calendars: eventStore.calendars
+                        )
+                    } else {
+                        emptyState
+                    }
                 }
+                .padding(16)
             }
+            .refreshable {
+                // 3단계에서 Google Calendar 동기화로 바뀐다. 지금은 저장된 데이터를 다시 읽는다.
+                eventStore.reload()
+            }
+            .background(backgroundColor.ignoresSafeArea())
             .navigationTitle("MyCalendar")
-            .onAppear(perform: reload)
-        }
-    }
-
-    private func reload() {
-        snapshot = storage.loadSnapshot()
-    }
-
-    private func saveSamples() {
-        do {
-            try storage.saveSnapshot(CalendarSnapshot(events: CalendarEvent.samples(), updatedAt: .now))
-            errorMessage = nil
-        } catch {
-            errorMessage = "저장 실패: \(error.localizedDescription)"
-        }
-        WidgetCenter.shared.reloadAllTimelines()
-        reload()
-    }
-
-    private func clearEvents() {
-        do {
-            try storage.clearSnapshot()
-            errorMessage = nil
-        } catch {
-            errorMessage = "삭제 실패: \(error.localizedDescription)"
-        }
-        WidgetCenter.shared.reloadAllTimelines()
-        reload()
-    }
-}
-
-private struct EventRow: View {
-    let event: CalendarEvent
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Capsule()
-                .fill(Color(hex: event.colorHex, fallback: .accentColor))
-                .frame(width: 4, height: 36)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(event.title)
-                Text("\(event.startDate.formatted(.dateTime.month().day().weekday())) · \(event.timeRangeText)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(backgroundColor, for: .navigationBar)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    NavigationLink(value: Route.settings) {
+                        Image(systemName: "gearshape")
+                    }
+                    .accessibilityLabel("설정")
+                }
+            }
+            .navigationDestination(for: Route.self) { route in
+                switch route {
+                case .settings:
+                    SettingsView(settingsStore: settingsStore, eventStore: eventStore)
+                }
+            }
+            .onChange(of: settings.displayMode) {
+                offset = 0
             }
         }
+    }
+
+    // MARK: - 기간 제목과 이동
+
+    private var periodHeader: some View {
+        HStack {
+            Button {
+                offset -= 1
+            } label: {
+                Image(systemName: "chevron.left")
+                    .frame(width: 44, height: 44)
+            }
+            .accessibilityLabel("이전")
+
+            Spacer()
+
+            VStack(spacing: 4) {
+                Text(settings.displayMode.title(for: range))
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(textColor)
+                if offset != 0 {
+                    Button("오늘로 이동") {
+                        offset = 0
+                    }
+                    .font(.caption)
+                }
+            }
+
+            Spacer()
+
+            Button {
+                offset += 1
+            } label: {
+                Image(systemName: "chevron.right")
+                    .frame(width: 44, height: 44)
+            }
+            .accessibilityLabel("다음")
+        }
+        .tint(accentColor)
+    }
+
+    // MARK: - 데이터가 없을 때
+
+    private var emptyState: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "calendar.badge.plus")
+                .font(.largeTitle)
+                .foregroundStyle(accentColor)
+            Text("아직 불러온 일정이 없습니다")
+                .font(.headline)
+                .foregroundStyle(textColor)
+            Text("Google 계정 연결은 3단계에서 추가됩니다.\n지금은 샘플 일정으로 화면과 위젯을 확인할 수 있습니다.")
+                .font(.subheadline)
+                .foregroundStyle(secondaryColor)
+                .multilineTextAlignment(.center)
+            Button("샘플 일정 넣기") {
+                eventStore.loadSampleData()
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(accentColor)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(24)
+        .background(RoundedRectangle(cornerRadius: 16).fill(textColor.opacity(0.07)))
     }
 }
 
 #Preview {
-    HomeView()
+    let storage = AppGroupStorage(
+        directoryURL: FileManager.default.temporaryDirectory.appendingPathComponent("preview"),
+        defaults: UserDefaults(suiteName: "MyCalendar.preview") ?? .standard
+    )
+    let eventStore = EventStore(storage: storage, reloadWidgets: {})
+    eventStore.loadSampleData()
+    return HomeView(settingsStore: SettingsStore(storage: storage, reloadWidgets: {}), eventStore: eventStore)
         .preferredColorScheme(.dark)
 }

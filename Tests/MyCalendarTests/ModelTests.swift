@@ -60,6 +60,23 @@ final class ModelTests: XCTestCase {
         XCTAssertFalse(decoded.showEventTitles)
     }
 
+    func testSettingsWithoutThemeUseAppearanceDefault() throws {
+        let decoded = try JSONDecoder().decode(CalendarSettings.self, from: Data(#"{"appearance":"light"}"#.utf8))
+        XCTAssertEqual(decoded.appearance, .light)
+        XCTAssertEqual(decoded.theme, .light)
+    }
+
+    func testApplyAppearanceResetsTheme() {
+        var settings = CalendarSettings()
+        settings.theme.accentHex = "#FF0000"
+        XCTAssertTrue(settings.isThemeCustomized)
+
+        settings.applyAppearance(.light)
+        XCTAssertEqual(settings.appearance, .light)
+        XCTAssertEqual(settings.theme, .light)
+        XCTAssertFalse(settings.isThemeCustomized)
+    }
+
     func testCalendarColorOverrideWins() {
         let event = CalendarEvent(id: "1", calendarId: "work", title: "t", startDate: date(2), endDate: date(3),
                                   isAllDay: true, colorHex: "#111111")
@@ -68,18 +85,43 @@ final class ModelTests: XCTestCase {
         XCTAssertEqual(CalendarSettings.default.colorHex(for: event), "#111111")
     }
 
+    // MARK: - CalendarSnapshot
+
+    func testSnapshotFromStageOneLoadsWithoutCalendars() throws {
+        // 1단계에서 저장한 형식: calendars 키가 없다
+        let snapshot = CalendarSnapshot.sample(relativeTo: date(2), calendar: calendar)
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(snapshot)) as? [String: Any])
+        json.removeValue(forKey: "calendars")
+        let data = try JSONSerialization.data(withJSONObject: json)
+
+        let decoded = try JSONDecoder().decode(CalendarSnapshot.self, from: data)
+        XCTAssertEqual(decoded.events, snapshot.events)
+        XCTAssertEqual(decoded.calendars, [])
+    }
+
+    func testSampleSnapshotHasCalendarsForAllEvents() {
+        let snapshot = CalendarSnapshot.sample(relativeTo: date(2), calendar: calendar)
+        let calendarIds = Set(snapshot.calendars.map(\.id))
+        XCTAssertFalse(snapshot.events.isEmpty)
+        XCTAssertTrue(snapshot.events.allSatisfy { calendarIds.contains($0.calendarId) })
+    }
+
     // MARK: - AppGroupStorage
 
-    func testStorageRoundTrip() throws {
+    /// 테스트마다 새 임시 폴더와 UserDefaults를 쓰는 저장소
+    private func makeTemporaryStorage() throws -> AppGroupStorage {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let suiteName = "MyCalendarTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
-        defer {
+        addTeardownBlock {
             defaults.removePersistentDomain(forName: suiteName)
             try? FileManager.default.removeItem(at: directory)
         }
+        return AppGroupStorage(directoryURL: directory, defaults: defaults)
+    }
 
-        let storage = AppGroupStorage(directoryURL: directory, defaults: defaults)
+    func testStorageRoundTrip() throws {
+        let storage = try makeTemporaryStorage()
         XCTAssertNil(storage.loadSnapshot())
         XCTAssertEqual(storage.loadSettings(), CalendarSettings.default)
 
@@ -94,5 +136,53 @@ final class ModelTests: XCTestCase {
 
         try storage.clearSnapshot()
         XCTAssertNil(storage.loadSnapshot())
+    }
+
+    // MARK: - SettingsStore / EventStore
+
+    func testSettingsStoreSavesChangesAndRequestsWidgetReload() throws {
+        let storage = try makeTemporaryStorage()
+        let reloaded = expectation(description: "widget reload requested")
+        let store = SettingsStore(storage: storage, reloadWidgets: { reloaded.fulfill() })
+
+        store.update { $0.displayMode = .weekly }
+        store.setCalendar("work", visible: false)
+        store.setColorOverride("#123456", forCalendar: "work")
+
+        // 앱을 다시 켠 것처럼 같은 저장소에서 새로 읽어도 유지되어야 한다
+        let reopened = SettingsStore(storage: storage, reloadWidgets: {})
+        XCTAssertEqual(reopened.settings.displayMode, .weekly)
+        XCTAssertFalse(reopened.isCalendarVisible("work"))
+        XCTAssertEqual(reopened.settings.calendarColorOverrides["work"], "#123456")
+
+        // 연속 변경은 한 번의 갱신 요청으로 합쳐진다 (두 번 호출되면 expectation이 실패)
+        wait(for: [reloaded], timeout: 3)
+    }
+
+    func testSettingsStoreBindingUpdatesSettings() throws {
+        let store = SettingsStore(storage: try makeTemporaryStorage(), reloadWidgets: {})
+        let binding = store.binding(\.maxEventsPerDay)
+        binding.wrappedValue = 5
+        XCTAssertEqual(store.settings.maxEventsPerDay, 5)
+    }
+
+    func testEventStoreSampleDataAndClear() throws {
+        var reloadCount = 0
+        let store = EventStore(storage: try makeTemporaryStorage(), reloadWidgets: { reloadCount += 1 })
+        XCTAssertFalse(store.hasData)
+
+        store.loadSampleData(now: date(2, 8))
+        XCTAssertTrue(store.hasData)
+        XCTAssertEqual(store.calendars.count, CalendarInfo.samples.count)
+        XCTAssertEqual(reloadCount, 1)
+
+        var settings = CalendarSettings()
+        settings.hiddenCalendarIds = ["sample-work"]
+        XCTAssertFalse(store.visibleEvents(settings: settings).contains { $0.calendarId == "sample-work" })
+        XCTAssertLessThan(store.visibleEvents(settings: settings).count, store.events.count)
+
+        store.clear()
+        XCTAssertFalse(store.hasData)
+        XCTAssertEqual(reloadCount, 2)
     }
 }

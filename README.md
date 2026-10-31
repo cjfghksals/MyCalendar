@@ -12,7 +12,7 @@ Google Calendar 일정을 iPhone 잠금 화면과 홈 화면 위젯에 표시하
 | 단계 | 내용 | 상태 |
 |---|---|---|
 | 1 | 프로젝트 환경 구축 (XcodeGen, 앱/위젯 타깃, App Groups, GitHub Actions) | 완료 |
-| 2 | 기본 앱 (메인 화면, 설정 화면, 데이터 모델) | 대기 |
+| 2 | 기본 앱 (메인 화면, 설정 화면, 데이터 모델) | 진행 중 |
 | 3 | Google Calendar 연동 (OAuth, API, 파싱, 오류 처리) | 대기 |
 | 4 | 캘린더 UI (1일, 7일, 월간, 사용자 색상) | 대기 |
 | 5 | WidgetKit (잠금 화면, 홈 화면, 데이터 공유, 갱신) | 대기 |
@@ -28,10 +28,12 @@ MyCalendar/
 │   ├── MyCalendar.entitlements       # 앱: App Groups
 │   └── Widget.entitlements           # 위젯: App Groups
 ├── Sources/
-│   ├── App/                          # 메인 앱 (Google 로그인, API 호출, 설정)
+│   ├── App/                          # 메인 앱
+│   │   ├── Stores/                   # SettingsStore(설정), EventStore(일정) - 저장 + 위젯 갱신 요청
+│   │   └── Views/                    # HomeView(메인), CalendarView(날짜별 목록), SettingsView(설정)
 │   ├── Widget/                       # 위젯 확장 (App Group 데이터만 읽음)
 │   └── Shared/                       # 앱과 위젯이 함께 컴파일하는 코드
-│       ├── Models/                   # CalendarEvent, CalendarSettings
+│       ├── Models/                   # CalendarEvent, CalendarInfo, CalendarSettings, DaySection
 │       ├── Storage/                  # AppGroupStorage
 │       └── Extensions/               # Color+Hex
 ├── Tests/MyCalendarTests/            # 단위 테스트
@@ -62,7 +64,11 @@ git push
 빌드 결과는 GitHub 저장소의 **Actions** 탭 → 최근 실행에서 확인한다.
 
 - `MyCalendar-unsigned.ipa`: 서명되지 않은 앱 (그대로는 iPhone에 설치할 수 없음)
+- `screenshots`: iPhone 17 시뮬레이터에서 찍은 1일·7일·한 달·설정 화면 (샘플 일정, 한국어)
 - `build-logs`: xcodebuild 전체 로그 (빌드 오류 분석용)
+
+> `.github/workflows/` 파일을 바꾼 push가 `workflow scope` 오류로 거부되면,
+> Windows에 저장된 GitHub 인증에 workflow 권한이 없는 것이다. 코드·문서 push는 영향이 없다.
 
 ## Windows에서 할 수 없는 작업
 

@@ -44,7 +44,38 @@ struct CalendarEvent: Codable, Identifiable, Hashable, Sendable {
 /// App Group에 저장하는 일정 묶음. 위젯은 이 값만 읽는다.
 struct CalendarSnapshot: Codable, Hashable, Sendable {
     var events: [CalendarEvent]
+    /// 사용자의 캘린더 목록 (설정 화면의 캘린더별 표시·색상 지정에 사용)
+    var calendars: [CalendarInfo]
     var updatedAt: Date
+
+    init(events: [CalendarEvent], calendars: [CalendarInfo] = [], updatedAt: Date) {
+        self.events = events
+        self.calendars = calendars
+        self.updatedAt = updatedAt
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case events
+        case calendars
+        case updatedAt
+    }
+
+    /// 1단계에서 저장한 데이터에는 calendars가 없으므로 빈 목록으로 읽는다.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        events = try container.decode([CalendarEvent].self, forKey: .events)
+        calendars = try container.decodeIfPresent([CalendarInfo].self, forKey: .calendars) ?? []
+        updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+    }
+
+    /// Google Calendar 연동 전, 화면과 위젯 확인용 샘플 데이터
+    static func sample(relativeTo now: Date = .now, calendar: Calendar = .current) -> CalendarSnapshot {
+        CalendarSnapshot(
+            events: CalendarEvent.samples(relativeTo: now, calendar: calendar),
+            calendars: CalendarInfo.samples,
+            updatedAt: now
+        )
+    }
 }
 
 extension Sequence where Element == CalendarEvent {
@@ -71,6 +102,7 @@ extension CalendarEvent {
             calendar.date(bySettingHour: hour, minute: minute, second: 0, of: day(offset)) ?? day(offset)
         }
 
+        // colorHex: 캘린더 색상(CalendarInfo.samples)을 따르고, 일부는 Google의 일정별 색상처럼 따로 지정
         return [
             CalendarEvent(id: "sample-1", calendarId: "sample-work", title: "프로젝트 마감",
                           startDate: day(0), endDate: day(1), isAllDay: true, colorHex: "#FF453A"),
@@ -86,6 +118,16 @@ extension CalendarEvent {
                           startDate: time(1, 15), endDate: time(1, 16), isAllDay: false, colorHex: "#BF5AF2"),
             CalendarEvent(id: "sample-7", calendarId: "sample-family", title: "가족 모임",
                           startDate: day(3), endDate: day(4), isAllDay: true, colorHex: "#FF375F"),
+            CalendarEvent(id: "sample-8", calendarId: "sample-personal", title: "영어 스터디",
+                          startDate: time(5, 19), endDate: time(5, 21), isAllDay: false, colorHex: "#30D158"),
+            CalendarEvent(id: "sample-9", calendarId: "sample-work", title: "부산 출장",
+                          startDate: day(8), endDate: day(10), isAllDay: true, colorHex: "#0A84FF"),
+            CalendarEvent(id: "sample-10", calendarId: "sample-family", title: "어머니 생신",
+                          startDate: day(12), endDate: day(13), isAllDay: true, colorHex: "#FF375F"),
+            CalendarEvent(id: "sample-11", calendarId: "sample-work", title: "분기 회고",
+                          startDate: time(15, 14), endDate: time(15, 16), isAllDay: false, colorHex: "#0A84FF"),
+            CalendarEvent(id: "sample-12", calendarId: "sample-personal", title: "치과 정기검진",
+                          startDate: time(20, 11), endDate: time(20, 12), isAllDay: false, colorHex: "#BF5AF2"),
         ]
     }
 }
