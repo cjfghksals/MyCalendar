@@ -1,0 +1,42 @@
+# --- XcodeGen 생성물 (project.yml에서 다시 만든다) ---
+*.xcodeproj/
+*.xcworkspace/
+Config/*-Info.plist
+
+# --- 빌드 결과물 ---
+build/
+DerivedData/
+*.ipa
+*.xcarchive
+*.dSYM
+*.dSYM.zip
+*.xcresult
+
+# --- Xcode 사용자 데이터 ---
+xcuserdata/
+*.xcuserstate
+
+# --- Swift Package Manager ---
+.build/
+.swiftpm/
+
+# --- 비밀 정보: 절대 커밋하지 않는다 (GitHub Actions Secrets 사용) ---
+*.p12
+*.cer
+*.certSigningRequest
+*.key
+*.p8
+*.mobileprovision
+*.provisionprofile
+Secrets.xcconfig
+*.secret.*
+client_secret*.json
+.env
+.env.*
+
+# --- OS / 편집기 ---
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/*
+!.vscode/extensions.json

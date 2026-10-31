@@ -1,0 +1,192 @@
+# MyCalendar iOS 빌드
+#
+# main 브랜치에 push하면 macOS 러너에서
+#   1) XcodeGen으로 MyCalendar.xcodeproj 생성
+#   2) 앱 + 위젯 확장을 iPhone용으로 빌드 (코드 서명 없이)
+#   3) 위젯이 앱 안에 포함됐는지 검증
+#   4) 서명되지 않은 IPA를 Artifact로 저장
+#   5) iOS 시뮬레이터에서 단위 테스트 실행
+# 를 수행한다.
+#
+# 주의: 여기서 만든 IPA는 서명되지 않아 그대로는 iPhone에 설치할 수 없다.
+#       코드 서명과 설치는 6단계에서 별도로 구성한다.
+
+name: iOS Build
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  XCODE_VERSION: "26.6"
+  XCODEGEN_VERSION: "2.46.0"
+  SCHEME: MyCalendar
+
+jobs:
+  build:
+    name: Build app and widget (unsigned)
+    runs-on: macos-26
+    timeout-minutes: 30
+    defaults:
+      run:
+        # bash -eo pipefail: 파이프 중간(xcodebuild)이 실패해도 단계가 실패로 처리된다
+        shell: bash
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Select Xcode ${{ env.XCODE_VERSION }}
+        run: |
+          XCODE_APP="/Applications/Xcode_${XCODE_VERSION}.app"
+          if [ ! -d "$XCODE_APP" ]; then
+            echo "::error::Xcode ${XCODE_VERSION} is not installed on this runner. Installed versions:"
+            ls -d /Applications/Xcode*.app
+            exit 1
+          fi
+          sudo xcode-select --switch "$XCODE_APP/Contents/Developer"
+          xcodebuild -version
+
+      - name: Install XcodeGen ${{ env.XCODEGEN_VERSION }}
+        run: |
+          curl --fail --silent --show-error --location \
+            "https://github.com/yonaskolb/XcodeGen/releases/download/${XCODEGEN_VERSION}/xcodegen.zip" \
+            --output "$RUNNER_TEMP/xcodegen.zip"
+          unzip -q "$RUNNER_TEMP/xcodegen.zip" -d "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/xcodegen/bin" >> "$GITHUB_PATH"
+
+      - name: Generate Xcode project
+        run: |
+          xcodegen --version
+          xcodegen generate --spec project.yml
+
+      - name: Prepare build output
+        run: |
+          mkdir -p build/logs
+          # xcbeautify가 있으면 오류를 GitHub 화면에 주석으로 표시한다
+          if command -v xcbeautify >/dev/null 2>&1; then
+            echo "FORMATTER=xcbeautify --renderer github-actions" >> "$GITHUB_ENV"
+          else
+            echo "FORMATTER=cat" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build and archive for iPhone (unsigned)
+        run: |
+          xcodebuild archive \
+            -project MyCalendar.xcodeproj \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -destination "generic/platform=iOS" \
+            -archivePath build/MyCalendar.xcarchive \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            2>&1 | tee build/logs/archive.log | $FORMATTER
+
+      - name: Verify app and widget bundles
+        run: |
+          APP="build/MyCalendar.xcarchive/Products/Applications/MyCalendar.app"
+          APPEX="$APP/PlugIns/MyCalendarWidget.appex"
+          if [ ! -d "$APP" ]; then
+            echo "::error::MyCalendar.app was not found in the archive"
+            exit 1
+          fi
+          if [ ! -d "$APPEX" ]; then
+            echo "::error::MyCalendarWidget.appex is not embedded in MyCalendar.app"
+            exit 1
+          fi
+
+          plist() { /usr/libexec/PlistBuddy -c "Print :$2" "$1/Info.plist"; }
+          APP_ID=$(plist "$APP" CFBundleIdentifier)
+          WIDGET_ID=$(plist "$APPEX" CFBundleIdentifier)
+          APP_GROUP=$(plist "$APP" AppGroupIdentifier)
+          EXTENSION_POINT=$(plist "$APPEX" NSExtension:NSExtensionPointIdentifier)
+          VERSION="$(plist "$APP" CFBundleShortVersionString) ($(plist "$APP" CFBundleVersion))"
+
+          if [ "$EXTENSION_POINT" != "com.apple.widgetkit-extension" ]; then
+            echo "::error::Unexpected extension point: $EXTENSION_POINT"
+            exit 1
+          fi
+
+          {
+            echo "### MyCalendar build"
+            echo ""
+            echo "| Item | Value |"
+            echo "|---|---|"
+            echo "| Xcode | $(xcodebuild -version | head -n 1) |"
+            echo "| App bundle ID | \`$APP_ID\` |"
+            echo "| Widget bundle ID | \`$WIDGET_ID\` |"
+            echo "| App Group | \`$APP_GROUP\` |"
+            echo "| Version | $VERSION |"
+            echo "| App size | $(du -sh "$APP" | cut -f1) |"
+            echo ""
+            echo "This IPA is **unsigned** and cannot be installed on an iPhone as-is."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Package unsigned IPA
+        run: |
+          mkdir -p build/ipa/Payload
+          cp -R build/MyCalendar.xcarchive/Products/Applications/MyCalendar.app build/ipa/Payload/
+          (cd build/ipa && zip -qry ../MyCalendar-unsigned.ipa Payload)
+          ls -lh build/MyCalendar-unsigned.ipa
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v7
+        with:
+          path: build/MyCalendar-unsigned.ipa
+          archive: false
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Run unit tests (iOS Simulator)
+        run: |
+          UDID=$(xcrun simctl list devices available --json \
+            | jq -r '[.devices | to_entries | sort_by(.key)[] | select(.key | contains("iOS")) | .value[] | select(.name | startswith("iPhone"))] | last | .udid // empty')
+          if [ -z "$UDID" ]; then
+            echo "::error::No available iPhone simulator found"
+            xcrun simctl list devices available
+            exit 1
+          fi
+          echo "Using simulator: $(xcrun simctl list devices | grep "$UDID")"
+
+          xcodebuild test \
+            -project MyCalendar.xcodeproj \
+            -scheme "$SCHEME" \
+            -destination "platform=iOS Simulator,id=$UDID" \
+            -derivedDataPath build/DerivedData \
+            -resultBundlePath build/TestResults.xcresult \
+            CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee build/logs/test.log | $FORMATTER
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-logs
+          path: build/logs/
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results
+          path: build/TestResults.xcresult
+          retention-days: 7
+          if-no-files-found: ignore

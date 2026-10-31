@@ -1,0 +1,6 @@
+# Windows에서 작성하고 macOS에서 빌드하므로 줄바꿈을 LF로 통일한다.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.pdf binary
