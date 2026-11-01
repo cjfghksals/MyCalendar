@@ -11,6 +11,10 @@
 #
 # 주의: 여기서 만든 IPA는 서명되지 않아 그대로는 iPhone에 설치할 수 없다.
 #       코드 서명과 설치는 6단계에서 별도로 구성한다.
+#
+# 무료 Apple ID 설치용 빌드: Actions 화면에서 수동 실행(Run workflow)할 때 "sideload"를 켜면
+# 번들 ID와 App Group ID를 설치용 접두어(SIDELOAD_BUNDLE_ID_PREFIX)로 바꿔 빌드한다.
+# 무료 계정에 등록된 번들 ID는 직접 지울 수 없어서, 실제 ID는 유료 계정용으로 남겨 두기 위함이다.
 
 name: iOS Build
 
@@ -24,18 +28,27 @@ on:
     paths-ignore:
       - "**.md"
   workflow_dispatch:
+    inputs:
+      sideload:
+        description: "무료 Apple ID 설치용 (번들 ID를 com.cjfghksals.sideload.* 로 바꿔 빌드)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 concurrency:
-  group: ios-build-${{ github.ref }}
+  # 설치용 빌드와 일반 빌드는 서로 취소하지 않는다
+  group: ios-build-${{ github.ref }}-${{ inputs.sideload == true && 'sideload' || 'standard' }}
   cancel-in-progress: true
 
 env:
   XCODE_VERSION: "26.6"
   XCODEGEN_VERSION: "2.46.0"
   SCHEME: MyCalendar
+  SIDELOAD: ${{ inputs.sideload == true }}
+  SIDELOAD_BUNDLE_ID_PREFIX: com.cjfghksals.sideload
+  IPA_NAME: ${{ inputs.sideload == true && 'MyCalendar-sideload-unsigned.ipa' || 'MyCalendar-unsigned.ipa' }}
 
 jobs:
   build:
@@ -99,6 +112,12 @@ jobs:
             echo "::warning::GOOGLE_IOS_CLIENT_ID secret is not set. Google sign-in is disabled in this build."
           fi
 
+          # 무료 설치용이면 앱·위젯 번들 ID와 App Group ID가 모두 설치용 접두어로 바뀐다 (project.yml 참고)
+          SIDELOAD_SETTINGS=()
+          if [ "$SIDELOAD" = "true" ]; then
+            SIDELOAD_SETTINGS=(BUNDLE_ID_PREFIX="$SIDELOAD_BUNDLE_ID_PREFIX")
+          fi
+
           xcodebuild archive \
             -project MyCalendar.xcodeproj \
             -scheme "$SCHEME" \
@@ -110,6 +129,7 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             "${GOOGLE_SETTINGS[@]}" \
+            "${SIDELOAD_SETTINGS[@]}" \
             2>&1 | tee build/logs/archive.log | $FORMATTER
 
       - name: Verify app and widget bundles
@@ -132,6 +152,14 @@ jobs:
           EXTENSION_POINT=$(plist "$APPEX" NSExtension:NSExtensionPointIdentifier)
           VERSION="$(plist "$APP" CFBundleShortVersionString) ($(plist "$APP" CFBundleVersion))"
           if [ -n "$(plist "$APP" GoogleClientID)" ]; then GOOGLE_STATUS="configured"; else GOOGLE_STATUS="not configured"; fi
+          if [ "$SIDELOAD" = "true" ]; then BUILD_TYPE="sideload (free Apple ID)"; else BUILD_TYPE="standard"; fi
+
+          if [ "$SIDELOAD" = "true" ] && [[ "$APP_ID" != "$SIDELOAD_BUNDLE_ID_PREFIX".* || "$WIDGET_ID" != "$APP_ID".* ]]; then
+            echo "::error::Sideload bundle IDs were not applied: app=$APP_ID widget=$WIDGET_ID"
+            exit 1
+          fi
+          # 로그에도 남겨 둔다 (번들 ID는 비밀 정보가 아님)
+          echo "Build type: $BUILD_TYPE / app: $APP_ID / widget: $WIDGET_ID / App Group: $APP_GROUP"
 
           if [ "$EXTENSION_POINT" != "com.apple.widgetkit-extension" ]; then
             echo "::error::Unexpected extension point: $EXTENSION_POINT"
@@ -143,6 +171,7 @@ jobs:
             echo ""
             echo "| Item | Value |"
             echo "|---|---|"
+            echo "| Build type | $BUILD_TYPE |"
             echo "| Xcode | $(xcodebuild -version | head -n 1) |"
             echo "| App bundle ID | \`$APP_ID\` |"
             echo "| Widget bundle ID | \`$WIDGET_ID\` |"
@@ -158,13 +187,13 @@ jobs:
         run: |
           mkdir -p build/ipa/Payload
           cp -R build/MyCalendar.xcarchive/Products/Applications/MyCalendar.app build/ipa/Payload/
-          (cd build/ipa && zip -qry ../MyCalendar-unsigned.ipa Payload)
-          ls -lh build/MyCalendar-unsigned.ipa
+          (cd build/ipa && zip -qry "../$IPA_NAME" Payload)
+          ls -lh "build/$IPA_NAME"
 
       - name: Upload unsigned IPA
         uses: actions/upload-artifact@v7
         with:
-          path: build/MyCalendar-unsigned.ipa
+          path: build/${{ env.IPA_NAME }}
           archive: false
           retention-days: 14
           if-no-files-found: error
